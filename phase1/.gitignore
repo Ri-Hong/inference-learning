@@ -1,0 +1,5 @@
+bin/
+*.o
+*.nsys-rep
+*.sqlite
+*.ncu-rep
