@@ -41,7 +41,7 @@ void vectorAddCpu(const float *a, const float *b, float *c, int n) {
 __global__ void vectorAddKernel(const float *a, const float *b, float *c,
                                 int n) {
   int i = threadIdx.x + blockDim.x * blockIdx.x;
-  if (i < N) {
+  if (i < n) {
     c[i] = a[i] + b[i];
   }
 }
