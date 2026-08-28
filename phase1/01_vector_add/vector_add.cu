@@ -23,8 +23,9 @@
 // ============================================================================
 
 void vectorAddCpu(const float *a, const float *b, float *c, int n) {
-  // TODO
-  (void)a; (void)b; (void)c; (void)n;
+  for (int i = 0; i < n; i++) {
+    c[i] = a[i] + b[i];
+  }
 }
 
 // ============================================================================
@@ -39,8 +40,10 @@ void vectorAddCpu(const float *a, const float *b, float *c, int n) {
 
 __global__ void vectorAddKernel(const float *a, const float *b, float *c,
                                 int n) {
-  // TODO
-  (void)a; (void)b; (void)c; (void)n;
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+  if (i < N) {
+    c[i] = a[i] + b[i];
+  }
 }
 
 // ============================================================================
