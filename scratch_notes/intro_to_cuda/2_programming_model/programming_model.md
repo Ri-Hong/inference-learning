@@ -83,7 +83,6 @@ int main(void) {
 
     // De-allocate memory
     cudaFree(d_c);
-    free(h_c);
 }
 ```
 
