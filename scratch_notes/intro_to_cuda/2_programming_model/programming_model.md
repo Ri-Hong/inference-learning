@@ -72,8 +72,8 @@ int main(void) {
     cudaMemcpy(d_c, h_c, sizeof(int), cudaMemcpyHostToDevice);
 
     // Configuration Parameters
-    dime grid_size(1);
-    dime block_size(1);
+    dim3 grid_size(1);
+    dim3 block_size(1);
 
     // Launch the Kernel
     kernel<<<grid_size, block_size>>>(...);
