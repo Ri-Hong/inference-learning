@@ -59,8 +59,12 @@ __global__ void vectorAddKernel(const float *a, const float *b, float *c,
 
 __global__ void vectorAddGridStride(const float *a, const float *b, float *c,
                                     int n) {
-  // TODO
-  (void)a; (void)b; (void)c; (void)n;
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+  int stride = gridDim.x * blockDim.x;
+  while (i < n) {
+    c[i] = a[i] + b[i];
+    i += stride;
+  }
 }
 
 // ============================================================================
@@ -82,8 +86,11 @@ __global__ void vectorAddGridStride(const float *a, const float *b, float *c,
 
 __global__ void vectorAddScattered(const float *a, const float *b, float *c,
                                    int n) {
-  // TODO
-  (void)a; (void)b; (void)c; (void)n;
+  int t = threadIdx.x + blockDim.x * blockIdx.x; // t = thread id
+  int i = (t % SCATTER) * (n / SCATTER) + (t / SCATTER);
+  if (i < n) {
+    c[i] = a[i] + b[i];
+  }
 }
 
 // ------------------------------------------------------------------ reporting
