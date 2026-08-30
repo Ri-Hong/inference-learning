@@ -22,7 +22,7 @@
 
 #include "../common/cuda_utils.cuh"
 
-#define BLOCK 256
+#define BLOCK 256 // # of threads per block
 
 // All of v1-v4 have the same contract:
 //
@@ -49,9 +49,28 @@
 // Before you run it: which lanes of a warp are active at each step?
 // ============================================================================
 
+// Each block owns a 256 patch
+// Each block has 256 threads, one for each element in the patch
 __global__ void reduce_v1(const float *in, float *out, int n) {
-  // TODO
-  (void)in; (void)out; (void)n;
+  extern __shared__ float s[];
+  int tid = threadIdx.x; // index for s. Each Block gets its own 256-wide shared memory. One localI for each thread
+  int inI = threadIdx.x + blockDim.x * blockIdx.x; // index for in. Each block needs a different global index
+
+  // copy in into s
+  s[tid] = (inI < n) ? in[inI]: 0;
+
+  __syncthreads(); // barrier to wait until all copys are done
+  
+  // blockDim.x = 256
+  for (int stride = 1; stride < blockDim.x; stride *= 2) {
+    if (tid % (2 * stride) == 0) {
+      s[tid] += s[tid + stride];
+    }
+    __syncthreads(); // barrier to wait until all updates to this level of the tree are done
+  }
+  if (tid == 0) {
+    out[blockIdx.x] = s[0];
+  }
 }
 
 // ============================================================================
@@ -70,9 +89,29 @@ __global__ void reduce_v1(const float *in, float *out, int n) {
 // ============================================================================
 
 __global__ void reduce_v2(const float *in, float *out, int n) {
-  // TODO
-  (void)in; (void)out; (void)n;
+  extern __shared__ float s[];
+  int tid = threadIdx.x; // index for s. Each Block gets its own 256-wide shared memory. One localI for each thread
+  int inI = threadIdx.x + blockDim.x * blockIdx.x; // index for in. Each block needs a different global index
+
+  // copy in into s
+  s[tid] = (inI < n) ? in[inI]: 0;
+
+  __syncthreads(); // barrier to wait until all copys are done
+  
+
+  for (int stride = 1; stride < blockDim.x; stride *= 2) {
+    int index = 2 * stride * tid;
+    if (index + stride < blockDim.x) {
+      s[index] += s[index + stride];
+    }
+
+    __syncthreads(); // barrier to wait until all updates to this level of the tree are done
+  }
+  if (tid == 0) {
+    out[blockIdx.x] = s[0];
+  }
 }
+
 
 // ============================================================================
 // TODO v3 — sequential addressing
@@ -87,8 +126,26 @@ __global__ void reduce_v2(const float *in, float *out, int n) {
 // ============================================================================
 
 __global__ void reduce_v3(const float *in, float *out, int n) {
-  // TODO
-  (void)in; (void)out; (void)n;
+  extern __shared__ float s[];
+  int tid = threadIdx.x; // index for s. Each Block gets its own 256-wide shared memory. One localI for each thread
+  int inI = threadIdx.x + blockDim.x * blockIdx.x; // index for in. Each block needs a different global index
+
+  // copy in into s
+  s[tid] = (inI < n) ? in[inI]: 0;
+
+  __syncthreads(); // barrier to wait until all copys are done
+  
+
+  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      s[tid] += s[tid + stride];
+    }
+    __syncthreads(); // barrier to wait until all updates to this level of the tree are done
+  }
+
+  if (tid == 0) {
+    out[blockIdx.x] = s[0];
+  }
 }
 
 // ============================================================================
@@ -107,8 +164,35 @@ __global__ void reduce_v3(const float *in, float *out, int n) {
 // ============================================================================
 
 __global__ void reduce_v4(const float *in, float *out, int n) {
-  // TODO
-  (void)in; (void)out; (void)n;
+  extern __shared__ float s[];
+  
+  int tid = threadIdx.x; // index for s. Each Block gets its own 256-wide shared memory. One localI for each thread
+  int i = blockIdx.x * (blockDim.x * 2) + threadIdx.x;
+  int i2 = i + blockDim.x;
+
+  // copy in into s
+  s[tid] = 0;
+  
+  if (i < n) {
+    s[tid] += in[i];
+  }
+  if (i2 < n) {
+    s[tid] += in[i2];
+  };
+
+  __syncthreads(); // barrier to wait until all copys are done
+  
+
+  for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      s[tid] += s[tid + stride];
+    }
+    __syncthreads(); // barrier to wait until all updates to this level of the tree are done
+  }
+
+  if (tid == 0) {
+    out[blockIdx.x] = s[0];
+  }
 }
 
 // ============================================================================
@@ -125,7 +209,11 @@ __global__ void reduce_v4(const float *in, float *out, int n) {
 // ============================================================================
 
 __inline__ __device__ float warpReduceSum(float v) {
-  // TODO
+
+  for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+    v += __shfl_down_sync(0xffffffffu, v, offset);
+  }
+
   return v;
 }
 
@@ -147,8 +235,38 @@ __inline__ __device__ float warpReduceSum(float v) {
 // ============================================================================
 
 __global__ void reduce_v5(const float *in, float *out, int n) {
-  // TODO
-  (void)in; (void)out; (void)n;
+  __shared__ float warpSums[32];
+
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+  int stride = blockDim.x * gridDim.x;
+
+  // Step 1
+  float sum = 0;
+  for (int j = i; j < n; j += stride) {
+    sum += in[j];
+  }
+
+  // Step 2
+  float reduction = warpReduceSum(sum);
+
+  // Step 3
+  if (threadIdx.x % 32 == 0) {
+    warpSums[threadIdx.x / 32] = reduction;
+  }
+
+  __syncthreads();
+
+  // Step 4
+  float finalRes = 0;
+  if (threadIdx.x < 32) {
+    float res = (threadIdx.x < blockDim.x / 32) ? warpSums[threadIdx.x] : 0.0f;
+    finalRes = warpReduceSum(res);
+  }
+
+  // Step 5
+  if (threadIdx.x == 0) {
+    out[blockIdx.x] = finalRes;
+  }
 }
 
 // ----------------------------------------------------------------- host driver
