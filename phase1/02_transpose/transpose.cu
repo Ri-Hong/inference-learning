@@ -14,7 +14,7 @@
 
 #include "../common/cuda_utils.cuh"
 
-#define TILE 32
+#define TILE 32 // # of threads in a tile
 #define BLOCK_ROWS 8  // each thread handles TILE/BLOCK_ROWS = 4 elements
 
 // Blocks are launched as dim3(TILE, BLOCK_ROWS) = 32 x 8 threads over a grid of
@@ -38,8 +38,23 @@
 // ============================================================================
 
 __global__ void copyKernel(float *out, const float *in, int n) {
-  // TODO
-  (void)out; (void)in; (void)n;
+  // threadIdx.x in [0, 32)
+  // blockDim.x = 32
+  // blockIdx.x in [0, n/32)
+  int c = threadIdx.x + blockDim.x * blockIdx.x;
+
+  // threadIdx.y in [0, 8)
+  // TILE = 32
+  // blockIdx.y in [0, n/32)
+  int baseR = threadIdx.y + TILE * blockIdx.y;
+  // int baseR = [0, 1, 2, ..., 7] + [0, 32, 64, 96]
+
+  for (int i = 0; i < TILE; i+=BLOCK_ROWS) {
+    int r = baseR + i;
+    if (r < n && c < n) {
+      out[r * n + c] = in[r * n + c];
+    }
+  }
 }
 
 // ============================================================================
@@ -52,8 +67,15 @@ __global__ void copyKernel(float *out, const float *in, int n) {
 // ============================================================================
 
 __global__ void naiveTranspose(float *out, const float *in, int n) {
-  // TODO
-  (void)out; (void)in; (void)n;
+  int c = threadIdx.x + blockDim.x * blockIdx.x;
+  int baseR = threadIdx.y + TILE * blockIdx.y;
+
+  for (int i = 0; i < TILE; i+=BLOCK_ROWS) {
+    int r = baseR + i;
+    if (r < n && c < n) {
+      out[r * n + c] = in[c * n + r];
+    }
+  }
 }
 
 // ============================================================================
@@ -77,8 +99,31 @@ __global__ void naiveTranspose(float *out, const float *in, int n) {
 // ============================================================================
 
 __global__ void tiledTranspose(float *out, const float *in, int n) {
-  // TODO
-  (void)out; (void)in; (void)n;
+  __shared__ float tile[TILE][TILE];
+  // Phase 1: read a patch from `in`, write it into `tile`
+
+  // threadIdx.x in [0, 32)
+  // blockDim.x = 32
+  // blockIdx.x in [0, n/32)
+  int c = threadIdx.x + blockDim.x * blockIdx.x;
+  int baseR = threadIdx.y + TILE * blockIdx.y;
+  for (int i = 0; i < TILE; i+=BLOCK_ROWS) {
+    int r = baseR + i;
+    if (r < n && c < n) {
+      tile[threadIdx.y + i][threadIdx.x] = in[r * n + c];
+    }
+  }
+  
+  int outC = threadIdx.x + blockDim.x * blockIdx.y;
+  int outBaseR = threadIdx.y + TILE * blockIdx.x;
+  __syncthreads();
+  // Phase 2: read `tile` transposed, write it to `out`
+  for (int i = 0; i < TILE; i+=BLOCK_ROWS) {
+    int r = outBaseR + i;
+    if (r < n && outC < n) {
+      out[r*n + outC] = tile[threadIdx.x][threadIdx.y + i];
+    }
+  }
 }
 
 // ============================================================================
@@ -93,8 +138,31 @@ __global__ void tiledTranspose(float *out, const float *in, int n) {
 // ============================================================================
 
 __global__ void tiledPaddedTranspose(float *out, const float *in, int n) {
-  // TODO
-  (void)out; (void)in; (void)n;
+  __shared__ float tile[TILE][TILE+1];
+  // Phase 1: read a patch from `in`, write it into `tile`
+
+  // threadIdx.x in [0, 32)
+  // blockDim.x = 32
+  // blockIdx.x in [0, n/32)
+  int c = threadIdx.x + blockDim.x * blockIdx.x;
+  int baseR = threadIdx.y + TILE * blockIdx.y;
+  for (int i = 0; i < TILE; i+=BLOCK_ROWS) {
+    int r = baseR + i;
+    if (r < n && c < n) {
+      tile[threadIdx.y + i][threadIdx.x] = in[r * n + c];
+    }
+  }
+  
+  int outC = threadIdx.x + blockDim.x * blockIdx.y;
+  int outBaseR = threadIdx.y + TILE * blockIdx.x;
+  __syncthreads();
+  // Phase 2: read `tile` transposed, write it to `out`
+  for (int i = 0; i < TILE; i+=BLOCK_ROWS) {
+    int r = outBaseR + i;
+    if (r < n && outC < n) {
+      out[r*n + outC] = tile[threadIdx.x][threadIdx.y + i];
+    }
+  }
 }
 
 // ============================================================================
@@ -102,8 +170,11 @@ __global__ void tiledPaddedTranspose(float *out, const float *in, int n) {
 // ============================================================================
 
 static void transposeCpu(float *out, const float *in, int n) {
-  // TODO
-  (void)out; (void)in; (void)n;
+  for (int r = 0; r < n; r++) {
+    for (int c = 0; c < n; c++) {
+      out[r*n+c] = in[c*n+r];
+    }
+  }
 }
 
 // ----------------------------------------------------------------------- main
