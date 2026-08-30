@@ -141,12 +141,57 @@ Why padding by one float changed the number it did:
 **Output**
 
 ```text
-(paste)
+=== Device 0: NVIDIA RTX 6000 Ada Generation ===
+  compute capability : 8.9
+  SMs                : 142
+  warp size          : 32
+  max threads/block  : 1024
+  max threads/SM     : 1536
+  shared mem/block   : 48 KB
+  shared mem/SM      : 100 KB
+  regs/block         : 65536
+  global memory      : 50.87 GB
+  memory bus width   : 384 bits
+  peak DRAM bandwidth: 960.1 GB/s
+
+N = 16777216 elements (67.1 MB), block size 256
+
+              kernel           ms         GB/s   % of peak              sum   correct
+        v1 divergent       0.1965        341.6         36%       16777216.0       yes
+    v2 non-divergent       0.1258        533.5         56%       16777216.0       yes
+       v3 sequential       0.1213        553.1         58%       16777216.0       yes
+         v4 load+add       0.0692        969.5        101%       16777216.0       yes
+          v5 shuffle       0.0207       3245.4        338%       16777216.0       yes
+
+v5 vs v1, doing identical arithmetic: 9.5x
+
+The exact answer is 16777216.0. Watch the sum column across versions.
 ```
 
 **Biggest single jump was** v__ → v__, because:
 
 **On the differing sums**
+
+Takeaway:
+- there seems to be many ways to do the same thing. Some things that we can control
+- how many threads/blocks/grids to launch
+    - do we want more threads doing less things or less threads doing more operations?
+- memory access:
+    - If a thread needs to acces multiple elements, should we stride it or group it
+    - I.e. AAAABBBBCCCCDDDD or ABCDACBDABCDABCD
+- memory allocation
+    - should we use shared memory, or warp coalescing to read from registers
+- warp divergence
+    - How to structure threads so that all threads in a warp follow the same control flow
+- synchronization cost
+    - how many barriers does a kernel need and can they be reduced
+- bank conflict
+    - Shared memory on GPU is physically organized into 32 banks, each 4 bytes wide
+    - each bank can service one memory request per cycle
+    - If 32 threads hit 32 different banks, all 32 requests can be serviced in 1 cycle
+    - If say 4 threads hit the same bank, it will take 4 cycles to serve all 4 requests
+    - bank conflicts generally happen when index-to-thread mapping has a stride that is a multiple of 32
+
 
 ---
 
