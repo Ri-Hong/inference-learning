@@ -206,21 +206,54 @@ Takeaway:
 **Output — PyTorch**
 
 ```text
-(paste)
+nvcc -O3 -std=c++17 -arch=native -lineinfo 04_matmul/matmul.cu -o bin/matmul -lcublas 
+GPU 0 utilization: 0%
+Below 50% threshold — running ./bin/matmul
+=== Device 0: NVIDIA RTX 6000 Ada Generation ===
+  compute capability : 8.9
+  SMs                : 142
+  warp size          : 32
+  max threads/block  : 1024
+  max threads/SM     : 1536
+  shared mem/block   : 48 KB
+  shared mem/SM      : 100 KB
+  regs/block         : 65536
+  global memory      : 50.87 GB
+  memory bus width   : 384 bits
+  peak DRAM bandwidth: 960.1 GB/s
+
+GEMM: (2048 x 2048) x (2048 x 2048)
+Work: 17.18 GFLOP
+Ideal arithmetic intensity: 341.3 FLOP/byte
+<!--  -->
+                kernel           ms      GFLOP/s      vs cuBLAS    correct
+naive (row=blockIdx.y)        3.933       4367.6         10.01x        yes
+naive (row=blockIdx.x)       32.502        528.6         82.72x        yes
+   tiled shared memory        3.063       5609.0          7.80x        yes
+                cuBLAS        0.393      43724.8          1.00x        ref
 ```
 
-| kernel | GFLOP/s | % of cuBLAS |
-|---|---|---|
-| naive | | |
-| naive swapped | | |
-| tiled | | |
-| cuBLAS | | 100% |
-| torch fp32 | | |
-| torch fp16 | | |
 
 **Does torch fp32 match cuBLAS?** If not, why not?
 
 **Arithmetic intensity of a single decode step** (`[1, 4096] @ [4096, 4096]`):
+
+Takeaway:
+- swapping the x and y indices results in slower access
+- thread indexing increments x for a fixed y
+- In matmulNiave, we are fixing a row in A and iterating over columns in B
+    - The threads in a warp all have the same row and are accessing 32 consecutive columns in B
+    - When the request for the consec columns go to the memory controller at once, the memory controller realizes it can fetch multiple columns worth of data in 1 read, since the requested columns are row-major
+    - The total number of reads in 1. If the read size is 32, then 1 read will cover all the columns in the desired current row
+- In matmulSwapped, we are fixing a column in B and iterating over rows in A
+    - the threads in a warp are requesting consecutive rows in A
+    - Each cycle will perform 32 reads (one for each row)
+![matmul1](matmul1.png)
+
+- For the tiled GEMM via shared memory, the idea is we break up our A, B, C into 32x32 patches
+- For a given patch in C, we need to take one 32xK row strip from A and Kx32 col strip from B
+- We don't do the entire K operations at once. We break it up into (32x32) * K/32 patches and do the matmul within those patches insteas
+- The savings come from the fact that each element from A and B is loaded exactly once (into As, Bs respectively)
 
 ---
 

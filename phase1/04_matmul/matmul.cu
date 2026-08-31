@@ -19,14 +19,14 @@
 
 #define TILE 32
 
-#define CUBLAS_CHECK(call)                                                     \
-  do {                                                                         \
-    cublasStatus_t st_ = (call);                                               \
-    if (st_ != CUBLAS_STATUS_SUCCESS) {                                        \
-      std::fprintf(stderr, "cuBLAS error %s:%d: %d\n", __FILE__, __LINE__,     \
-                   static_cast<int>(st_));                                     \
-      std::exit(EXIT_FAILURE);                                                 \
-    }                                                                          \
+#define CUBLAS_CHECK(call)                                                 \
+  do {                                                                     \
+    cublasStatus_t st_ = (call);                                           \
+    if (st_ != CUBLAS_STATUS_SUCCESS) {                                    \
+      std::fprintf(stderr, "cuBLAS error %s:%d: %d\n", __FILE__, __LINE__, \
+                   static_cast<int>(st_));                                 \
+      std::exit(EXIT_FAILURE);                                             \
+    }                                                                      \
   } while (0)
 
 // All three kernels compute C = A * B with row-major storage:
@@ -51,10 +51,19 @@
 // read from A? From B?
 // ============================================================================
 
-__global__ void matmulNaive(const float *A, const float *B, float *C, int M,
-                            int N, int K) {
-  // TODO
-  (void)A; (void)B; (void)C; (void)M; (void)N; (void)K;
+// 32 x 32 threads in a block
+// N/32 x M/32 blocks in a grid
+__global__ void matmulNaive(const float* A, const float* B, float* C, int M, int N, int K) {
+  int row = threadIdx.y + blockDim.y * blockIdx.y;
+  int col = threadIdx.x + blockDim.x * blockIdx.x;
+
+  float ans = 0;
+  if (row < M and col < N) {
+    for (int i = 0; i < K; i++) {
+      ans += A[row * K + i] * B[i * N + col];
+    }
+    C[row * N + col] = ans;
+  }
 }
 
 // ============================================================================
@@ -74,10 +83,17 @@ __global__ void matmulNaive(const float *A, const float *B, float *C, int M,
 // you measure it.
 // ============================================================================
 
-__global__ void matmulNaiveSwapped(const float *A, const float *B, float *C,
-                                   int M, int N, int K) {
-  // TODO
-  (void)A; (void)B; (void)C; (void)M; (void)N; (void)K;
+__global__ void matmulNaiveSwapped(const float* A, const float* B, float* C, int M, int N, int K) {
+  int row = threadIdx.x + blockDim.x * blockIdx.x;
+  int col = threadIdx.y + blockDim.y * blockIdx.y;
+
+  float ans = 0;
+  if (row < M and col < N) {
+    for (int i = 0; i < K; i++) {
+      ans += A[row * K + i] * B[i * N + col];
+    }
+    C[row * N + col] = ans;
+  }
 }
 
 // ============================================================================
@@ -105,15 +121,33 @@ __global__ void matmulNaiveSwapped(const float *A, const float *B, float *C,
 // 0.0f into the tile rather than being skipped.
 // ============================================================================
 
-__global__ void matmulTiled(const float *A, const float *B, float *C, int M,
+__global__ void matmulTiled(const float* A, const float* B, float* C, int M,
                             int N, int K) {
-  // TODO
-  (void)A; (void)B; (void)C; (void)M; (void)N; (void)K;
+  // for a given y, x increments
+  int row = threadIdx.y + blockDim.y * blockIdx.y;
+  int col = threadIdx.x + blockDim.x * blockIdx.x;
+  float acc = 0;
+  __shared__ float As[TILE][TILE];
+  __shared__ float Bs[TILE][TILE];
+
+  if (row < M and col < N) {
+    for (int t = 0; t < K / TILE; t++) {
+      As[threadIdx.y][threadIdx.x] = A[row * K + (t * TILE + threadIdx.x)];
+      Bs[threadIdx.y][threadIdx.x] = B[(t * TILE + threadIdx.y) * N + col];
+
+      __syncthreads();
+      for (int k = 0; k < TILE; ++k) {
+        acc += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+      }
+      __syncthreads();
+    }
+    C[row * N + col] = acc;
+  }
 }
 
 // ----------------------------------------------------------------------- main
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   int n = (argc > 1) ? std::atoi(argv[1]) : 2048;
   int M = n, N = n, K = n;
   size_t bytesA = static_cast<size_t>(M) * K * sizeof(float);
@@ -133,10 +167,10 @@ int main(int argc, char **argv) {
   std::printf("Ideal arithmetic intensity: %.1f FLOP/byte\n\n",
               (gflop * 1e9) / idealBytes);
 
-  float *hA = static_cast<float *>(std::malloc(bytesA));
-  float *hB = static_cast<float *>(std::malloc(bytesB));
-  float *hC = static_cast<float *>(std::malloc(bytesC));
-  float *hRef = static_cast<float *>(std::malloc(bytesC));
+  float* hA = static_cast<float*>(std::malloc(bytesA));
+  float* hB = static_cast<float*>(std::malloc(bytesB));
+  float* hC = static_cast<float*>(std::malloc(bytesC));
+  float* hRef = static_cast<float*>(std::malloc(bytesC));
   fillRandom(hA, static_cast<size_t>(M) * K, 1);
   fillRandom(hB, static_cast<size_t>(K) * N, 2);
 
@@ -180,7 +214,7 @@ int main(int argc, char **argv) {
   dim3 gridRowMajorX((M + TILE - 1) / TILE, (N + TILE - 1) / TILE);
 
   struct Variant {
-    const char *name;
+    const char* name;
     std::function<void()> launch;
   };
   const std::vector<Variant> variants = {
@@ -194,7 +228,7 @@ int main(int argc, char **argv) {
        [&] { matmulTiled<<<gridColMajorX, block>>>(dA, dB, dC, M, N, K); }},
   };
 
-  for (const Variant &v : variants) {
+  for (const Variant& v : variants) {
     CUDA_CHECK(cudaMemset(dC, 0, bytesC));
     v.launch();
     CUDA_CHECK_KERNEL();
