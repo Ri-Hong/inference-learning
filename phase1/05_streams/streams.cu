@@ -21,7 +21,7 @@
 
 __global__ void emptyKernel() {}
 
-__global__ void scaleKernel(float *data, int n, float factor) {
+__global__ void scaleKernel(float* data, int n, float factor) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) data[i] = data[i] * factor + 1.0f;
 }
@@ -37,9 +37,16 @@ __global__ void scaleKernel(float *data, int n, float factor) {
 // You will change `rounds` later to flip which one dominates.
 // ============================================================================
 
-__global__ void busyKernel(float *data, int n, int rounds) {
-  // TODO
-  (void)data; (void)n; (void)rounds;
+__global__ void busyKernel(float* data, int n, int rounds) {
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+
+  if (i < n) {
+    float v = data[i];
+    for (int j = 0; j < rounds; j++) {
+      v = v * 1.0001f + 0.0001f;
+    }
+    data[i] = v;
+  }
 }
 
 int main() {
@@ -49,8 +56,9 @@ int main() {
   // An empty kernel does no memory traffic and no arithmetic. Whatever time it
   // takes is pure overhead: the driver packaging the launch, the command
   // reaching the GPU, the block scheduler spinning it up.
-  std::printf("--- Part 1: what does a launch cost when the kernel does "
-              "nothing? ---\n");
+  std::printf(
+      "--- Part 1: what does a launch cost when the kernel does "
+      "nothing? ---\n");
 
   float asyncMs = timeGpuMs([&] { emptyKernel<<<1, 1>>>(); }, 100, 1000);
   std::printf("  empty kernel, back to back      : %8.2f us\n",
@@ -76,7 +84,7 @@ int main() {
 
   const int total = 1 << 22;  // 4M elements
   size_t bytes = static_cast<size_t>(total) * sizeof(float);
-  float *dData;
+  float* dData;
   CUDA_CHECK(cudaMalloc(&dData, bytes));
   CUDA_CHECK(cudaMemset(dData, 0, bytes));
 
@@ -116,11 +124,11 @@ int main() {
   // Pinned (page-locked) host memory. cudaMemcpyAsync from ordinary pageable
   // memory silently falls back to a synchronous copy, so without this the whole
   // experiment quietly does nothing.
-  float *hPinned;
+  float* hPinned;
   CUDA_CHECK(cudaMallocHost(&hPinned, nbytes));
   for (int i = 0; i < n; ++i) hPinned[i] = 1.0f;
 
-  float *dBuf;
+  float* dBuf;
   CUDA_CHECK(cudaMalloc(&dBuf, nbytes));
 
   // Baseline: copy everything in, compute, copy everything out. Three serial
@@ -137,7 +145,7 @@ int main() {
 
   for (int nStreams : {2, 4, 8}) {
     std::vector<cudaStream_t> streams(nStreams);
-    for (auto &s : streams) CUDA_CHECK(cudaStreamCreate(&s));
+    for (auto& s : streams) CUDA_CHECK(cudaStreamCreate(&s));
 
     int chunk = n / nStreams;
     size_t chunkBytes = static_cast<size_t>(chunk) * sizeof(float);
@@ -160,13 +168,15 @@ int main() {
     // Predict the speedup for 2, 4, and 8 streams before you run it. What caps
     // it?
     // ========================================================================
+
     float ms = timeGpuMs(
         [&] {
           for (int i = 0; i < nStreams; ++i) {
             size_t off = static_cast<size_t>(i) * chunk;
-            (void)off;
-            (void)chunkBytes;
-            // TODO
+
+            cudaMemcpyAsync(dBuf+off, hPinned+off, chunkBytes, cudaMemcpyHostToDevice, streams[i]);
+            busyKernel<<<(chunk + 255) / 256, 256, 0, streams[i]>>>(dBuf+off, chunk, rounds);
+            cudaMemcpyAsync(hPinned+off, dBuf+off, chunkBytes, cudaMemcpyDeviceToHost, streams[i]);
           }
           cudaDeviceSynchronize();
         },
@@ -176,11 +186,12 @@ int main() {
     std::printf("  %d streams, async chunked          : %8.3f ms  (%.2fx)\n",
                 nStreams, ms, serialMs / ms);
 
-    for (auto &s : streams) CUDA_CHECK(cudaStreamDestroy(s));
+    for (auto& s : streams) CUDA_CHECK(cudaStreamDestroy(s));
   }
 
-  std::printf("\n  Once it works: set `rounds` to 5 and rerun. The speedup\n"
-              "  should change character. Explain why.\n");
+  std::printf(
+      "\n  Once it works: set `rounds` to 5 and rerun. The speedup\n"
+      "  should change character. Explain why.\n");
 
   CUDA_CHECK(cudaFreeHost(hPinned));
   CUDA_CHECK(cudaFree(dBuf));

@@ -260,16 +260,61 @@ Takeaway:
 ## 5. Streams and launch overhead
 
 ```text
-(paste)
+nvcc -O3 -std=c++17 -arch=native -lineinfo 05_streams/streams.cu -o bin/streams  
+GPU 0 utilization: 0%
+Below 50% threshold — running ./bin/streams
+=== Device 0: NVIDIA RTX 6000 Ada Generation ===
+  compute capability : 8.9
+  SMs                : 142
+  warp size          : 32
+  max threads/block  : 1024
+  max threads/SM     : 1536
+  shared mem/block   : 48 KB
+  shared mem/SM      : 100 KB
+  regs/block         : 65536
+  global memory      : 50.87 GB
+  memory bus width   : 384 bits
+  peak DRAM bandwidth: 960.1 GB/s
+
+--- Part 1: what does a launch cost when the kernel does nothing? ---
+  empty kernel, back to back      :     1.96 us
+  empty kernel + synchronize each :     5.05 us
+  cost of the synchronize         :     3.09 us
+
+--- Part 2: same work, different number of launches ---
+    launches   elems each       total ms    us / launch
+           1      4194304          0.013          12.52
+          16       262144          0.041           2.57
+         256        16384          0.500           1.95
+        4096         1024          7.915           1.93
+       65536           64        126.645           1.93
+
+  Where does this table stop measuring the kernel?
+
+--- Part 3: overlapping transfer and compute with streams ---
+  serial (1 stream, blocking copies) :    1.343 ms
+  2 streams, async chunked          :    1.101 ms  (1.22x)
+  4 streams, async chunked          :    0.980 ms  (1.37x)
+  8 streams, async chunked          :    0.926 ms  (1.45x)
+
+  Once it works: set `rounds` to 5 and rerun. The speedup
+  should change character. Explain why.
 ```
 
-| measurement | value |
-|---|---|
-| empty kernel launch | µs |
-| launch + synchronize | µs |
-| chunk count where overhead dominates | |
-| best stream speedup | x |
-
+Takeaways:
+- Part 1: Empty kernel launch takes 2.08 us
+- Part 2: Across each experiement, the total number of launches is the same. The first row launches 1 kernel, processing 4194304 elements each
+    - The last row launches 65536, processing 64 elements each
+    - The third column tells us that a 1 launch is the fastest, finishing in a total of 0.013 ms
+    - In the 4th column, we can see that as the # of launches surpasses 4096, the us/launch doesn't decrease anymore
+    - That is the kernel launch overhead. As each kernel is doing less work, it eventually converges at 2.04 us, because that is the cost of launching the kernel
+- Part 3: We split the array into nStreams chunks. Each steam processes 1 chunk of data
+    - The does async memcopys using `cudaMemcpyAsync()` and async kernel launches. Each stream does: H2D, compute, D2H
+    - Since the operations are asynchronous, the CPU issues them all to the GPU before the GPU can even processing the first one
+    - But the GPU will perserve the relative ordering of ops in each stream. I.e. H2D -> compute -> D2H
+    - The GPU will schedule each streamin a pipelined manner
+    - We see that as we increase the number of streams, the total execution time increases
+![pipeline_stream](pipeline_stream.png)
 ---
 
 ## Milestone
