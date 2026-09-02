@@ -49,7 +49,11 @@ SHAPES = [
 
 
 def arithmetic_intensity(m: int, k: int, n: int, dtype: torch.dtype) -> float:
-    raise NotImplementedError("TODO 1")
+    # for each of the m rows, multiply it with n columns (k elments each). Each op is multiple and accumulate (2 ops)
+    flops = 2*m*n*k
+    # In the best possible case, we move all elements from (A + B + C) * dtype from memory
+    nBytes = (m*k + k*n + m*n) * dtype.itemsize
+    return flops / nBytes
 
 
 # ============================================================================
@@ -64,7 +68,9 @@ def arithmetic_intensity(m: int, k: int, n: int, dtype: torch.dtype) -> float:
 
 
 def bench_gemm(m: int, k: int, n: int, dtype: torch.dtype) -> float:
-    raise NotImplementedError("TODO 2")
+    x = torch.randn(m, k, device="cuda", dtype=dtype)
+    w = torch.randn(k, n, device="cuda", dtype=dtype)
+    return benchmark(lambda: x @ w)
 
 
 def main():
